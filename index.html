@@ -8,28 +8,30 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- PapaParse for CSV processing -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
-    <!-- Marked.js for robust Markdown rendering -->
+    <!-- Marked.js for Markdown rendering -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <!-- PDF.js for PDF Text Extraction -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-    <!-- LocalForage for Offline Storage (IndexedDB wrapper) -->
+    <!-- LocalForage for Offline Storage -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
 
     <!-- Firebase SDKs -->
     <script type="module">
-        import { initializeApp } from "firebase/app";
-        import { getAnalytics } from "firebase/analytics";
+       import { initializeApp } from "firebase/app";
+import { getAnalytics } from "firebase/analytics";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getStorage, ref, uploadString, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 
+        // Global Firebase state
         window.firebaseDB = null;
         window.firebaseAuth = null;
         window.firebaseStorage = null;
         window.repoCollectionRef = null;
         window.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-        const firebaseConfig = {
+        // Use environment configuration
+ const firebaseConfig = {
   apiKey: "AIzaSyAqUFv2ECSUjYdcUbxTHL3ciPt4d1AW9FI",
   authDomain: "apac-shorts.firebaseapp.com",
   projectId: "apac-shorts",
@@ -39,10 +41,9 @@
   measurementId: "G-W636G302N1"
 };
 
-
         if (firebaseConfig) {
             try {
-               const app = initializeApp(firebaseConfig);
+                   const app = initializeApp(firebaseConfig);
                   const analytics = getAnalytics(app);
                 window.firebaseAuth = getAuth(app);
                 window.firebaseDB = getFirestore(app);
@@ -50,14 +51,22 @@
                 
                 const initAuth = async () => {
                     try {
+                        // ALWAYS use the environment tokens when available
                         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                             await signInWithCustomToken(window.firebaseAuth, __initial_auth_token);
                         } else {
                              await signInAnonymously(window.firebaseAuth);
                         }
                     } catch (authError) {
-                        console.warn("Auth failed, retrying anonymous:", authError);
-                        try { await signInAnonymously(window.firebaseAuth); } catch(e) { console.error("Anonymous Auth Failed:", e); }
+                        console.error("Auth failed:", authError);
+                        // Fallback attempt
+                        try { 
+                            if (!window.firebaseAuth.currentUser) {
+                                await signInAnonymously(window.firebaseAuth); 
+                            }
+                        } catch(e) { 
+                            console.error("Anonymous Auth Fallback Failed:", e); 
+                        }
                     }
                 };
                 
@@ -65,12 +74,18 @@
 
                 onAuthStateChanged(window.firebaseAuth, (user) => {
                     if (user) {
+                        // Correct path structure: /artifacts/{appId}/public/data/{collectionName}
                         window.repoCollectionRef = collection(window.firebaseDB, 'artifacts', window.appId, 'public', 'data', 'repository');
                         initRepoListener();
                         const statusEl = document.getElementById('cloud-status');
                         if(statusEl) {
                             statusEl.innerHTML = '<span class="text-green-600 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-green-500"></span> Cloud Connected</span>';
                             statusEl.className = 'text-sm font-mono text-green-700 bg-green-50 px-3 py-1 rounded border border-green-200';
+                        }
+                    } else {
+                        const statusEl = document.getElementById('cloud-status');
+                        if(statusEl) {
+                            statusEl.innerHTML = '<span class="text-amber-600">Connecting...</span>';
                         }
                     }
                 });
@@ -79,11 +94,12 @@
             }
         } else {
              const status = document.getElementById('cloud-status');
-             if(status) status.innerText = 'Local Mode';
+             if(status) status.innerText = 'Configuration Missing';
         }
 
         function initRepoListener() {
             if (!window.repoCollectionRef) return;
+            // Listening for changes in the repository collection
             onSnapshot(window.repoCollectionRef, (snapshot) => {
                 const repoData = { 'repo_campaign': [], 'repo_holdback': [], 'repo_kpop': [] };
                 snapshot.forEach((doc) => {
@@ -102,16 +118,19 @@
                 if (window.updateRepoCacheFromCloud) {
                     window.updateRepoCacheFromCloud(repoData);
                 }
+            }, (error) => {
+                console.error("Repository listener error:", error);
             });
         }
 
         window.saveToCloud = async (fileObj, category) => {
-            if (!window.repoCollectionRef) return false;
+            if (!window.repoCollectionRef || !window.firebaseAuth.currentUser) return false;
             const docId = `${category}_${fileObj.name.replace(/[^a-z0-9]/gi, '_')}`;
             const docRef = doc(window.repoCollectionRef, docId);
             let downloadURL = null;
             let contentToSave = fileObj.content;
 
+            // Optional Storage usage if configured
             if (window.firebaseStorage) {
                 try {
                     const storageRef = ref(window.firebaseStorage, `repository/${window.appId}/${docId}`);
@@ -119,6 +138,7 @@
                     downloadURL = await getDownloadURL(storageRef);
                     contentToSave = null; 
                 } catch (storageError) {
+                    // Fallback to Firestore direct if Storage is restricted
                     if (fileObj.content.length > 900000) return false;
                     contentToSave = fileObj.content;
                 }
@@ -136,20 +156,15 @@
                     date: new Date().toLocaleDateString()
                 });
                 return true;
-            } catch (e) { return false; }
+            } catch (e) { 
+                console.error("Save to Cloud failed:", e);
+                return false; 
+            }
         };
 
         window.deleteFromCloud = async (docId) => {
              if (!window.repoCollectionRef) return;
              try { await deleteDoc(doc(window.repoCollectionRef, docId)); } catch (e) { console.error("Delete failed:", e); }
-        };
-
-        window.fetchContentFromUrl = async (url) => {
-            try {
-                const response = await fetch(url);
-                if (!response.ok) throw new Error("Network response was not ok");
-                return await response.text();
-            } catch (error) { throw error; }
         };
     </script>
     <script>
@@ -228,11 +243,11 @@
         <div id="upload-section" class="bg-white p-8 rounded-xl shadow-sm border border-gray-200 mb-8 text-center hidden fade-in">
             <div class="max-w-4xl mx-auto">
                 <div class="mx-auto h-16 w-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mb-6">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16l-4-4m0 0l4-4m-4 4h18" /></svg>
                 </div>
                 <div class="flex justify-center items-center gap-4 mb-4">
                     <h2 class="text-2xl font-bold text-gray-900">Upload Data Sources</h2>
-                    <a href="https://drive.google.com/folders/1gL6vPS3VLIzbixoYlaEPzrBIa_8Jhhxe" target="_blank" class="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-full text-xs font-medium transition border border-blue-200">
+                    <a href="https://drive.google.com/drive/folders/1XV5hPMzgNRk-xAs1LDVwhxjQw30rAWXa?resourcekey=0-oAISdPdQj-T1HTYxwq_aNg&usp=drive_link" target="_blank" class="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-full text-xs font-medium transition border border-blue-200">
                         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M12.01 1.984c-1.396 0-2.61.76-3.3 1.91L.775 17.848a3.86 3.86 0 000 3.82c.66 1.157 1.88 1.905 3.286 1.922h15.895c1.405-.018 2.624-.766 3.284-1.922a3.86 3.86 0 000-3.82L15.31 3.894a3.86 3.86 0 00-3.3-1.91zM4.686 18.23l4.312-7.483 4.34 7.484H4.685zm8.685 0l-4.34-7.483 4.32-7.525 4.35 7.476-4.33 7.532z"/></svg>Open Drive Folder
                     </a>
                 </div>
@@ -285,7 +300,7 @@
             <!-- Top Control Bar -->
             <div class="mb-4 flex justify-between items-center bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
                 <button onclick="showUploadSection()" class="flex items-center text-sm font-medium text-gray-600 hover:text-blue-700 transition px-3 py-1 rounded hover:bg-blue-50">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>Add/Manage Data Sources
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16l-4-4m0 0l4-4m-4 4h18" /></svg>Add/Manage Data Sources
                 </button>
                 <div class="text-right flex items-center gap-3">
                     <div class="text-xs text-right"><span class="block text-green-600 font-bold uppercase tracking-wider text-[10px]">System Status</span><span id="data-source-indicator" class="text-gray-500 font-medium">Live Cloud Data</span></div>
@@ -303,7 +318,7 @@
                         <button onclick="switchTab('tab1')" id="btn-tab1" class="tab-btn whitespace-nowrap py-3 px-4 border-b-2 border-transparent font-medium text-sm text-gray-500 hover:text-gray-800 hover:border-gray-300 transition">Campaign HB Regional</button>
                         <button onclick="switchTab('tab5')" id="btn-tab5" class="tab-btn whitespace-nowrap py-3 px-4 border-b-2 border-transparent font-medium text-sm text-gray-500 hover:text-gray-800 hover:border-gray-300 transition">KPop Analysis</button>
                         <button onclick="switchTab('tab2')" id="btn-tab2" class="tab-btn whitespace-nowrap py-3 px-4 border-b-2 border-transparent font-medium text-sm text-gray-500 hover:text-gray-800 hover:border-gray-300 transition">Key Learnings</button>
-                        <button onclick="switchTab('tab3')" id="btn-tab3" class="tab-btn whitespace-nowrap py-3 px-4 border-b-2 border-transparent font-medium text-sm text-gray-500 hover:text-gray-800 hover:border-gray-300 transition text-blue-700">Year Ahead 2026</button>
+                        <button onclick="switchTab('tab3')" id="btn-tab3" class="tab-btn whitespace-nowrap py-3 px-4 border-b-2 border-transparent font-medium text-sm text-gray-500 hover:text-gray-800 hover:border-gray-300 transition">Year Ahead 2026</button>
                     </nav>
                     
                     <div class="flex items-center gap-2 bg-white px-3 py-1.5 rounded-md border border-gray-200 shadow-sm mb-2 md:mb-0">
@@ -332,28 +347,26 @@
 
             <div id="tab2" class="tab-content bg-white p-6 rounded-lg shadow-sm border border-gray-200 min-h-[500px] fade-in">
                 <div class="flex items-center justify-between mb-6 pb-4 border-b border-gray-100">
-                    <div><h2 class="text-2xl font-bold text-gray-900">Key Learnings & Executive Summary</h2><p class="text-sm text-gray-500">2025 Retrospective based on statistical performance.</p></div>
+                    <div><h2 class="text-2xl font-bold text-gray-900">Key Learnings & Executive Summary</h2><p class="text-sm text-gray-500">Full PDF Report Content.</p></div>
                     <button onclick="copyToClipboard(this, 'learnings-output')" class="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition focus:outline-none">Copy Report</button>
                 </div>
-                <div id="learnings-output" class="text-gray-600 markdown-content bg-white"><div class="p-8 border-2 border-dashed border-gray-200 rounded-lg bg-gray-50 text-center"><h4 class="font-medium text-gray-600 mb-2">Report Generation Ready</h4><p class="text-sm text-gray-500">Upload data files and click "Analyze" to generate the narrative report.</p></div></div>
+                <div id="learnings-output" class="text-gray-600 markdown-content bg-white"></div>
             </div>
 
             <div id="tab3" class="tab-content bg-white p-6 rounded-lg shadow-sm border border-gray-200 min-h-[500px] fade-in">
                 <div class="flex items-center justify-between mb-6 pb-4 border-b border-gray-100">
-                    <div><h2 class="text-2xl font-bold text-gray-900">2026 Year Ahead Strategy</h2><p class="text-sm text-gray-500">Strategic pillars derived from 2025 performance data.</p></div>
-                    <button onclick="copyToClipboard(this, 'year-ahead-output')" class="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition focus:outline-none">Copy Plan</button>
+                    <div><h2 class="text-2xl font-bold text-gray-900">Year Ahead Strategy Detail</h2><p class="text-sm text-gray-500">2026 Strategic Roadmap & Experimentation.</p></div>
+                    <div class="flex gap-2">
+                        <button onclick="copyToClipboard(this, 'year-ahead-output')" class="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition focus:outline-none">Copy Plan</button>
+                    </div>
                 </div>
-                <div id="year-ahead-output" class="text-gray-600 markdown-content bg-white"><p class="text-gray-500 italic">Strategy loaded from context.</p></div>
+                <div id="year-ahead-output" class="text-gray-600 markdown-content bg-white"></div>
             </div>
         </div>
     </div>
 
     <script>
         // --- 1. GLOBAL STATE & CONSTANTS ---
-        let globalData = [], globalHoldbackData = [], globalKPopData = [], globalKPopDates = [];
-        let repoCache = { 'repo_campaign': [], 'repo_holdback': [], 'repo_kpop': [] };
-        let currentMetricView = 'both'; 
-
         const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
         const GENDER_ORDER = ['Female', 'Male', 'GenPop']; 
         const AGE_ORDER = ['18-24', '25-34', '18-34', 'GenPop']; 
@@ -367,150 +380,266 @@
             'KR': ["Pets", "Templates", "KR Trends Page", "Infinite-S", "Spring", "Summer CF1", "Summer CF2", "Summer CF3", "KR Summer"]
         };
 
-        // CONTENT FROM PDF 5 (Full Key Learnings)
         const MANUAL_LEARNINGS_CONTENT = `
 # 2025 APAC Key Results & Learnings (Executive Summary)
 
-## Executive Overview: The "Friction" & "Relevance" Game
-2025 proved that Global Scale alone fails in APAC. Success was exclusively driven when we successfully removed Psychological Friction (via templates and consistent low-friction formats rather than "tentpole Fireworks") or increased Cultural Utility (via hyper-local IP/gamification/local audio).
+**Executive Overview: The "Friction" & "Relevance" Game**
 
-**Key Finding:** There is no perceived correlation for campaigns or country holdback observing DAC-SCT stat sig when DAU-SCT is also stat sig. DAC-SCT is a more down-funnel metric vs DAU-SCT.
+2025 proved that Global Scale alone fails in APAC. Success was exclusively driven when we successfully removed Psychological Friction (via templates and consistent low-friction formats rather than "tentpole Fireworks") or increased Cultural Utility (via hyper-local IP/gamification/local audio). There is also no perceived correlation for campaigns or country holdback observing DAC-SCT stat sig when DAU-SCT is also stat sig, most often if DAU-SCT is stat sig, DAC-SCT may or may not be stat sig, as it is a more down funnel metric vs DAU-SCT.
+
+Reference link for live data: [lzlimjocelyn-spec.github.io/2026-apac-shorts-learnings/](https://Izlimjocelyn-spec.github.io/2026-apac-shorts-learnings/)
 
 ### 1. Overall APAC Performance (Global Holdback)
+
 * **Positive Months:** April, July, October, November, December.
 * **Drivers:** Consistent contribution from Hyperlocal Evergreen (Pets/Photos/Food/Arts & Craft) and Local Audio (UTS/MVR).
 * **Exceptions:** Global BTMs only worked when heavily localized (Ed Sheeran JP, Alex Warren KR) or Gamified (F1 IN/KR), and when overlaid with "skill equalizer" feature/concept principles. Select GenAl features launched in Dec (Veo3 for ID and IN Arts & Craft) drove stat sig results, as well as Japan's seasonal winter campaign.
-* **Negative Months:** No overall stat sig negative months for APAC (from Apr to Dec), but significant segment-level negatives in specific markets driven by Global BTMs and SSC.
+* **Negative Months:** No overall stat sig negative months for APAC (from Apr to Dec), but significant segment-level negatives in specific markets driven by Global BTMs and SSC. Reference to appendix data below.
 
----
+### 2. What Worked: The Drivers of Momentum
 
-### 2. What Worked: Drivers of Momentum
+#### 1. The "Skill Equalizer" (Low Friction Templates):
 
-#### 1. The "Skill Equalizer" (Low Friction Templates)
-* **Insight:** Users want to create but fear low quality. Templates that use existing gallery assets or Gen AI remove this fear. Japan layering on local seasonal relevance (Winter/Christmas) helps increase relevance.
-* **Proof Points:**
-    * **Hyperlocal campaigns consistently drove growth:**
-        * JP Photos: JP Female 18-24 **+2.88%**, JP Female 18-34 **+1.7%**, JP Gen pop 18-24 **+1.29%**, JP Gen pop 18-34 **+1.1%**
-        * JP winter HL: JP Female GenPop **+1.8%**, JP Male GenPop **+1.08%**, JP GenPop **+0.77%**
-        * ID Pets: ID Gen pop 25-34 **+0.26%**, ID Gen pop 18-34 **+0.23%**, ID Gen pop **+0.26%**
-        * IN Travel: IN F25-34 **+0.19%**, IN F18-34 **+1.7%**
-        * IN Food: IN Gen pop 18-24 **+0.12%**
-        * IN Arts & Crafts: IN Gen pop 18-24 **+0.12%**, IN Male Gen Pop **+0.15%**
-    * **Select Global GenAl launches effective for ID:**
-        * ID Global Gen Al - Veo 31 (Dec): ID Female 18-34 **+1.35%**, ID Female GenPop **+1%**
+* **a. Insight:** Users want to create but fear low quality. Templates that use existing assets (Photos/Gallery assets) or Gen AI features remove this fear and lower the "quality" barrier. In Japan specifically, layering on local seasonal relevance (Winter/Christmas) also helps increase relevance for DAU-SCT interaction.
+* **b. Proof (Campaign HB):**
+    * **i.** Hyperlocal campaigns (**JP Photos:** JP Female 18-24: +2.88%, JP Female 18-34: +1.7%, JP Gen pop 18-24: +1.29%, JP Gen pop 18-34: +1.1%, **JP winter HL:** JP Female GenPop +1.8%, JP Male GenPop +1.08%, JP GenPop +0.77%, **ID Pets:** ID Gen pop 25-34: +0.26%, ID Gen pop 18-34: +0.23%, ID Gen pop: +0.26%, **IN Travel:** IN F25-34: +0.19%, IN F18-34: +1.7%, /**IN Food:** IN Gen pop 18-24: +0.12%/ **IN Arts & Crafts:** IN Gen pop 18-24: +0.12%, IN Male Gen Pop: +0.15%) consistently drove stat sig positive growth in the APAC Global Shorts Holdback, particularly in April, July, October, November and December.
+    * **ii.** Select Global GenAl launches also proved effective for ID (**ID Global Gen Al - Veo 31 (Dec):** ID Female 18-34 +1.35%, ID Female GenPop +1%)
 
-#### 2. Gamifying the "Male" Barrier
-* **Insight:** Young males engage deeply with Sports or Gaming IP bridge creation gaps.
-* **Proof Points:** IN F1 BTM (Male 18-34 **+0.42%**); KR F1 BTM (Male 18-24 **+7.73%**). Roblox gaming effects (ID Female Gen Pop **+0.53%**).
+#### 2. Gamifying the "Male" Barrier:
 
-#### 3. Audio "Drumbeats" (Consistent Habits)
-* **Insight:** Users build habits around consistent audio formats (UTS/MVR) rather than one-off artist drops.
-* **Proof Points:** KR UTS2 F18-34 **+2.15%**; IN MVR2 Gen Pop **+0.12%**. In India, MVR ("remix") outperformed UTS ("adoption").
+* **a. Insight:** Young males do not "create content"; they "play games." Interactive effects tied to globally relevant Sports or Gaming IP help to bridge this gap, activating passive males.
+* **b. Proof (Campaign HB):** IN F1 BTM (Male 18-34: +0.42%); KR F1 BTM (Male 18-24: +7.73%). Roblox gaming effects (ID Female Gen Pop: +0.53%).
 
-#### 4. Global Artist Tentpoles with Hyper-localization
-* **Proof Points:** Ed Sheeran JP F18-34 **+1.45%** (Photo dump); Alex Warren KR F Gen pop **+1.31%** (Photobooth collage); Taylor Swift JP F Gen pop **+1.99%** (Showgirl effect).
+#### 3. Audio "Drumbeats" (Consistent High Frequency Local Habits):
 
-#### 5. Diversified K-pop Creation Ecosystem
-* **Insight:** Pivot from dance challenges to transitions, vlogs, and pets Expansion lowers entry barriers.
-* **Proof Points:** ID fashion transitions/pets (Baby Monster/Le Sserafim F18-34 **+0.39%**). JP Aespa non-dance creative (Male Gen Pop **+0.90%**). Brazil Aespa (Male 25-34 **+0.93%**). Germany IDLE achieved **+3.27%** lift for Males 18-24.
+* **a. Insight:** Users build habits around consistent audio formats (UTS/MVR) rather than one-off artist drops to create habit loops.
+* **b. Proof (Campaign HB):** KR UTS2 F18-34: +2.15%; IN MVR2 Gen Pop: +0.12%. In India, MVR ("remix" sound) significantly outperformed UTS ("use this sound") featuring the same artists, confirming that creation mechanic and feature preference alignment is critical.
+
+#### 4. Global Artist Tentpoles with hyper-localization and "skill equalizer" principles
+
+* **a. Insight:** The primary driver of a music campaign's success is not the artist's global fame, but the GTM execution's ability to provide a low-friction "container" for creation, with concepts customised for gender relevance (males vs females).
+* **b. Proof (Campaign HB):** Ed Sheeran JP F18-34 +1.45% lift, used a template/photo dump mechanic anchored and relatable to local user behavior in JP. Alex Warren's BTM in Korea provided a "photobooth collage" effect and a "reminiscing fond memories" template, which led to KR F Gen pop +1.31% lift. Taylor Swift's BTM succeeded in Japan, yielding F Gen pop +1.99% lift, by offering a template for her dance trend and a custom "Showgirl" effect, making participation easy and relatable for females although irrelevant for JP males.
+
+#### 5. Diversified K-pop creation ecosystem
+
+* **a. Insight:** K-pop's influence in APAC is best harnessed by pivoting from high-friction "dance challenges" to a diversified creation ecosystem that includes non-dance trends (transitions, vlogs, pets) and custom artists branded effects. This expansion lowers entry barriers for non-core segments (Males globally, older Gen Pop) and sustains engagement beyond initial fandom spikes.
+* **b. Proof (Campaign Holdback):** In Indonesia, non-dance concepts like fashion transitions and pet overlays unlocked DAU-SCT for young females (Baby Monster/Le Sserafim F18-34: +0.39%). In Japan, Aespa's non-dance creative engaged Male Gen Pop (+0.90%). The Aespa BTM drove DAU-SCT in Brazil (Male 25-34: +0.93%) and Germany (GenPop 25-34: +1.12%) by leveraging custom effects. The IDLE campaign's inclusion of non-dance/pet variants achieved a massive +3.27% lift for Males 18-24 in Germany.
 
 #### 6. Strategic Optimization of Discovery Surfaces
-* **Insight:** Home feed Shelf format is effective for Japan "pull" discovery; in-feed SSC works for India "push" discovery.
-* **Proof Points:** JP Shelf (Female 18-34 **+1.50%**, JP Gen Pop 25-34 **+0.99%**), IN SSC (Male 18-34 **+0.13%**).
+
+* **a. Insight:** For trend discovery, the optimal surface is market-dependent: the Home feed Shelf format is effective for "pull" discovery in Japan, while the in-feed SSC format works for "push" discovery with specific male segments in India.
+* **b. Proof (Campaign HB):** JP Shelf (Female 18-34 +1.50%, JP Gen Pop 25-34 +0.99%), IN SSC (Male 18-34: +0.13%).
+
+## 3. What Didn't Work: The "Relevance" Gaps
+
+#### 1. Generic Global or Kpop "Tentpoles" without Localization and "skill equalizer" principles:
+
+* **a. Insight:** Global fame (Taylor Swift, Sabrina Carpenter) does not overcome high creation friction (complex dance challenges) or local relevance. Global BTMs are only effective when they include a low-friction template or effect mechanic (e.g., Ed Sheeran's photo dump template) customised by local relevance, gender or be gender agnostic.
+* **b. Proof (Campaign HB):** Global BTMs that failed (**Taylor Swift in IN/ID/JP:** IN Female 18-24: -0.76%, ID Female 25-34 -0.48%, ID Male Gen pop: -0.39%, JP Male 18-24 (-4.25%), JP Male 18-34 (-2.2%), JP Male Gen pop (-1.68%); **Sabrina Carpenter BTM in KR/ID:** ID Male 18-24:-1.1%, KR Gen pop 18-24: -5.09%) relied on high-friction dance challenges without sufficient hyperlocalized template and concept support. In the US, MX, FR, UK, Aespa BTM failed for Males in the US (-0.49%) and Mexico (-2.04%), likely due to low male view-share or gender-misaligned creative. In France and the UK, even with high female views (66%), Aespa BTM was negative for females, suggesting "localization failure" where creatives felt inauthentic to Western users.
+
+#### 2. Interruptive "Push" Formats in Mature Markets:
+
+* **a. Insight:** Forcing trends into the feed (SSC) annoys deliberate users in mature markets (JP/KR).
+* **b. Proof (Campaign HB):** SSC consistently negative in JP (F18-34 -1.07%) and KR (F25-34 -1.81%), whereas Shelf (Pull) was positive.
+
+#### 3. Misaligned "Generic" Categories:
+
+* **a. Insight:** "Authentic Formats" (OOTD/DIML), misaligned Sports IP or misaligned topics (Arts and Craft for ID) can feel generic and high-effort compared to culturally nuanced hooks.
+* **b. Proof (Campaign HB):** India "Authentic Formats" drove -0.28% for Male 25-34. Indonesia Global GenAl Veo3 (ID Male GenPop -0.86%). Misaligned locally irrelevant Sports IP US Tennis Open ID (ID Male 25-34: -0.59%). Unpopular/misaligned ID Arts & Craft (Drawing Al effects) (ID Female 25-34-0.32%, ID Female 18-34-0.26%, ID female GenPop -0.28%)
+
+## 4. Critical Implications for 2026
+
+### 1. Global scaled BTMs and principles
+
+* **a. Stop "Lift & Shift" with feature/concept integration mandate:** Global Artists BTMs must be launched with a mandatory dedicated, low-friction creation variant (e.g., custom template, Al effect, or gallery upload functionality) that aligns with local creation trends (e.g., photo dumps, collage) to maximize conversion or be deprioritized.
+* **b. Global Inclusion of Non-Dance Mandate:** Mandate that all global K-Pop proactive campaigns include "low-friction" non-dance creative variants (transitions, pets, vlogs, photo dumps) to ensure scalability into Male and Gen Pop segments.
+* **c. Localization Pre-Approval:** Establish a localization "authenticity check" for Western markets (EMEA/LATAM) to prevent the negative incrementality observed in FR/UK where high views did not convert to creation.
+
+### 2. Feature Investment
+
+* **a. Al Localization:** Invest heavily in Gen Al tools (e.g., Dream Drawing Al, as used in IN Arts & Crafts) to lower the creation barrier for high-effort categories, making advanced creative concepts accessible to Gen Pop.
+* **b. Segment-Specific Effects:** Prioritize the rollout of high-production custom artist effects customised for gender or gender agnostic (e.g., Aespa Studio Effect) in markets with high male engagement like Brazil.
+
+### 3. Surface/Format Prioritization
+
+* **a. Surface Segmentation:** Kill SSC for Females in JP/KR immediately; migrate investment to Shelf. Keep SSC for Indian Males and optimize male-skewing hyperlocal trends.
+* **b. Mandate FSI Conversion:** Utilize the FSI surface for all music-led creation conversions, leveraging its proven high-impact performance over other nitrate surfaces.
+
+### 4. Content Double Clicks
+
+* **a. Triple Down on Evergreen:** Expand the hyperlocal portfolio by identifying the top 3 high-demand, low-friction content verticals (e.g., Vlogs, Fitness Fails, Local Aesthetics) for each market (IN, ID, JP, KR).
+* **b. Feature and Concept Integration Mandate:** Mandate that all hyperlocal evergreen campaigns must be launched with a dedicated, low-friction creation feature (e.g., custom template, Al effect, or gallery upload functionality) to maximize conversion, mirroring the success of JP Photos.
+* **c. Elevate Hyperlocal Audio Cadence:** Increase the frequency of UTS (KR) and MVR (IN) from bi-weekly to weekly refreshes in 2026, ensuring the FSI surface is continuously fed with fresh, locally relevant audio.
+* **d. Dedicated Gamified IP Track:** Create a dedicated 2026 roadmap for 4-6 major, male-skewing global IP tentpoles (Gaming, Sports, Pop Culture) focused on interactive, gamified effect creation (e.g., skill-based games, AR challenges) for India and South Korea.
+* **e. Indonesia Sports Pivot:** For Indonesia, pivot the Sports IP strategy away from competitive games (F1, Tennis) and towards content that mirrors local creation trends (humorous/candid fitness, "fit checks" for Padel/Pickleball), ensuring the effect/concept is locally resonant.
+
+### 5. Lifecycle Retention/habit formation
+
+* **a. The "Third" Segment:** We have cracked F18-34 (Easy creation: Templates) and M18-34 (Relevant Gaming/Sports IP). The 2026 battleground is Retention-turning these one-off creators into weekly actives via "Streak" mechanics.
 
 ---
 
-### 3. What Didn't Work: The "Relevance" Gaps
+## Market Deep Dives
 
-#### 1. Generic Global/Kpop "Tentpoles" without Localization
-* **Proof Points:** Global BTMs that failed relied on high-friction dance challenges. Taylor Swift IN Female 18-24 **-0.76%**, ID Female 25-34 **-0.48%**, ID Male Gen pop **-0.39%**, JP Male 18-24 **-4.25%**. Sabrina Carpenter KR Gen pop 18-24 **-5.09%**. Aespa BTM failed for Males in US (**-0.49%**) and Mexico (**-2.04%**).
+### 1. India (IN): Key Results & Learnings
 
-#### 2. Interruptive "Push" Formats in Mature Markets
-* **Proof Points:** SSC consistently negative in JP (F18-34 **-1.07%**) and KR (F25-34 **-1.81%**).
-
-#### 3. Misaligned "Generic" Categories
-* **Proof Points:** India OOTD Male 25-34 **-0.28%**. ID Drawing Al effects Female 25-34 **-0.32%**, Female 18-34 **-0.26%**.
-
----
-
-### Market Deep Dives
-
-#### 1. India (IN): Key Results & Learnings
 **Behavioral Theme:** Males engage with "Skill/Play"; Gen Pop engages with "Remix Culture."
-* **What Worked:** Young males reject performative vlogs but engage deeply with Skill-Based Gamification (F1 BTM: Male 18-34 **+0.42%**). Indian users prefer Transformative Creation ("Remix") over passive adoption (MVR2: Gen pop **+0.12%**).
-* **What Didn't Work:** Localization mismatch. Taylor Swift IN Female 18-24 **-0.76%** due to high friction and lack of localized template "cheat codes."
 
-#### 2. Indonesia (ID): Key Results & Learnings
+**What Worked (The Drivers)**
+
+* **Gamified Sports Activation (F1 BTM):**
+    * **Why it Worked (Hypothesis):** Young Indian males reject "performative" creation (vlogs) but engage deeply with Skill-Based Gamification. The F1 effect turned creation into a "reflex challenge," bypassing the vanity barrier.
+    * **Data Proof:** IN Global HB (July) Gen pop: +0.29%; Campaign HB: Male 18-24: +0.51%, Male 25-34: +0.36%, Male 18-34: +0.42%, Male GenPop: +0.22%.
+* **Hyperlocal "Remix" Audio (MVR):**
+    * **Why it Worked (Hypothesis):** Indian users prefer Transformative Creation ("Remix") over passive adoption ("Use This Sound"). MVR allows for "cultural co-creation."
+    * **Data Proof:** IN Global HB (Oct/Nov) Gen pop (Oct: +0.22%, Nov: +0.21%), Gen pop 18-34 (Oct: +0.26%, Nov: +0.21%), Gen pop 18-24 (Oct: +0.42%, Nov: +0.37%), Gen pop Males (Oct: +0.2%, Nov: +0.18%), Gen pop 25-34 (Oct: +0.14%); Campaign HB: MVR2 over Oct- Nov (Gen pop: +0.12%, Gen pop 18-34: +0.11%, Gen pop 25-34: +0.13%).
+* **Culturally "Deep" Verticals (Food/Arts):**
+    * **Why it Worked (Hypothesis):** Low-Friction Authenticity. "Behind the scenes" cooking and "Dream Drawing Al" lowered the barrier for Gen Pop to share hobbies without needing high production value.
+    * **Data Proof:** IN Global HB (Oct/Nov/Dec) Gen pop (Oct: +0.22%, Nov: +0.21%, Dec: +0.26%), Gen pop 18-34 (Oct: +0.26%, Nov: +0.21%, Dec: +0.2%), Gen pop 18-24 (Oct: +0.42%, Nov: +0.37%), Gen pop Males (Oct: +0.2%, Nov: +0.18%), Gen pop 25-34 (Oct: +0.14%); IN Global HB (July) Gen pop: +0.29%. Campaign HB: IN HL arts and craft (Gen pop: +0.12%, Gen pop males: +0.15%) and SSC2 (M18-34: +0.13%, Males 18-34: +0.13%) in Nov, HL food non Al (Gen pop 18-24: +0.12%), IN HL Travel CF1 (Female 25-34: +0.19%, Female 18-34: +0.14%)
+* **Hyperlocal trend via Shorts "push" surface (SSC):**
+    * **Why it Worked (Hypothesis):** "Push" (SSC) works for impulsive/bored mindsets (Males) for trend discovery and creation inspiration.
+    * **Data Proof:** IN Global HB (Oct/Nov) Gen pop (Oct: +0.22%, Nov: +0.21%), Gen pop Males (Oct: +0.2%, Nov: +0.18%), Gen pop 18-34 (Oct: +0.26%, Nov: +0.21%), Gen pop 18-24 (Oct: +0.42%, Nov: +0.37%). Campaign HB: SSC2 M18-34: +0.13% in Nov.
+
+**▼ What Didn't Work (The Drags)**
+
+* **Generic Global "Tentpoles" (Taylor Swift):**
+    * **Why it Failed:** Localization Mismatch. Global fame does not override high friction. The complex dance challenge and lack of hyper-local use-case lacked a "Cheat Code" (Template) for Indian users.
+    * **Data Proof:** Taylor Swift BTM IN Female 18-24 -0.76%.
+* **Generic "Authentic" Formats (OOTD/DIML):**
+    * **Why it Failed:** Relevance Gap. Generic US-style prompts (Outfit of the Day/Day in my life) feel disconnected from the "Real India" user reality compared to hyper-specific cultural hooks.
+    * **Data Proof:** Global Authentic Formats IN Male 25-34: -0.28%, IN GenPop 25-34: -0.22%, IN GenPop 18-34: -0.17%
+
+### 2. Indonesia (ID): Key Results & Learnings
+
 **Behavioral Theme:** Females need "Safe Fandom"; Males need "Hyper-Relevant IP."
-* **What Worked:** Zero-Friction entry via pre-existing assets (HL Pets GenPop **+0.16%**). Fandom signaling via transitions (K-Pop ID F18-34 **+0.39%**). Lady Gaga ID Male 25-34 **+0.80%**.
-* **What Didn't Work:** Cultural Disconnect. Unlike India, F1/Tennis are not mass. F1 effect Male 25-34 **-0.61%**. Ramadan Gen pop 25-34 **-0.23%**.
 
-#### 3. Japan (JP): Key Results & Learnings
-**Behavioral Theme:** Aesthetic Shield is mandatory; Interruptions are rejected.
-* **What Worked:** Privacy by Design via high-fidelity "Faceless" templates (HL Photos Female 18-24 **+2.88%**). Pull discovery (Shelf Female 18-34 **+1.50%**). Winter proactive Male GenPop **+0.91%**.
-* **What Didn't Work:** Format Friction. Inserting trends into feed (SSC) is perceived as noise (Female 18-34 **-1.07%**). Taylor Swift Male 18-24 **-4.25%**.
+**What Worked (The Drivers)**
 
-#### 4. South Korea (KR): Key Results & Learnings
-**Behavioral Theme:** High-Octane Gaming for Males; "Drumbeat" Audio for Females.
-* **What Worked:** Competitive Utility. Korean males engaged with F1 as a "high score challenge" (Male 18-24 **+7.73%**). Regular audio bi-weekly prompts built habits (UTS2 Female 18-34 **+2.15%**).
-* **What Didn't Work:** Similar to Japan, KR users rejected forced SSC trends (Female 25-34 **-1.81%**). Aespa Non Dance Female 18-34 **-1.63%**.
+* **Pre-Existing Asset Injection (Pets) and Skill Equalizer features:**
+    * **Why it Worked (Hypothesis):** Zero-Friction Entry. Users already have pet photos in their gallery. Prompting them to upload existing assets removes the "Capture Anxiety." Select GenAl features (Veo 3) also helped reduce editing friction to upload.
+    * **Data Proof:** ID HL Pets GenPop +0.16%, GenPop 25-34 +0.26%, GenPop 18-34 +0.23%, ID Global Gen Al - veo 31 (Dec): Female 18-34 +1.35%, Female GenPop +1%
+* **Non-Dance x Easy feature K-Pop (Aespa/IDLE/BabyMonster):**
+    * **Why it Worked (Hypothesis):** Inclusive Fandom. Pivot from "Dance" (High Skill) to "Transition/Effect" (Low Skill) allowed non-dancers to signal fandom identity.
+    * **Data Proof:** ID Global Shorts holdback (Aug) Females 18-24 +1.13%, campaigns driving this: Aespa Kpop proactive: ID F25-34 +0.41%, IDLE Kpop proactive 1 ID F18-24 +0.51%, Baby Monster/ Le Sseraffim Kpop proactive 3 ID F18-34 +0.39%.
+* **Pop Culture Alignment (Lady Gaga/Roblox):**
+    * **Why it Worked (Hypothesis):** Identity Signaling. Wednesday Dance (Gaga) and Roblox aligned with specific subcultures (Horror/Gaming), driving identity-based creation.
+    * **Data Proof:** Lady Gaga BTM ID Male 25-34 +0.80%, ID Male 18-34 +0.47%, ID Male GenPop +0.33%; Roblox ID F 25-34 +0.67%, ID F Gen pop +0.53%
 
-#### 5. ROW Context: K-Pop Learnings
+**▼ What Didn't Work (The Drags)**
+
+* **Cultural Disconnect - Misaligned Sports IP (F1/Tennis) or Category expression (Al drawing effect):**
+    * **Why it Failed:** Cultural Disconnect. Unlike India, F1/Tennis are not "mass" in ID. The gamified effects failed because the underlying IP lacked cultural currency compared to local sports (Padle, Pickelball etc.). For scaled ID arts and craft, the way that it materializes in ID is more on the "Home DIY and craft" expression vs drawing random pictures with the Al drawing effect.
+    * **Data Proof:** ID Global Shorts holdback (Aug) Males 18-24-0.5%, campaigns driving this: F1 Effect BTM (June to July) ID Male 25-34 -0.61%, ID Males 18-34-0.49%, ID Gen pop -0.28%. ID Global Shorts holdback (Sept) Males 18-24 -0.72%, campaigns driving this: US Tennis Open effect Male 25-34-0.59%, Genpop -0.21%. ID Arts & Crafts (Drawing effect): Female 25-34-0.32%, Female 18-34 -0.26%, Female GenPop -0.28%
+* **Gender disconnect (Global scaled artist BTMs)**
+    * **Why it failed:** Global Artist BTMs (Sabrina/Taylor) are only effective when they include a low-friction template or effect mechanic (e.g., Ed Sheeran's photo dump template) customised by local relevance, gender or be gender agnostic.
+    * **Data proof:** ID Global Shorts holdback (Sept) Males 18-24 (-0.72%), campaigns driving this: Sabrina Carpenter BTM: Male 18-24 (-1.1%). ID Global Shorts holdback (Nov) Males 18-34 (-0.03%), campaigns driving this: Taylor Swift BTM: Female 25-34 (-0.48%), Male Gen pop (-0.39%) over Oct to Nov.
+* **Interruptive Trends (Shelf 2):**
+    * **Why it Failed:** Curatorial Failure. The specific hyper-local trend selection (Lip Sync/Dance) on Shelf 2 failed to resonate, causing negative sentiment, might be a result of strong competition in the market (Tik Tok).
+    * **Data Proof:** ID Global Shorts holdback (Nov) Males 18-34 (-0.03%), campaigns driving this: Shelf2 (Nov-Dec): Male 18-24 -0.65%, Male GenPop -0.36%, GenPop 18-24-0.55%, Gen pop -0.23%
+* **Saturated Cultural Tentpole**
+    * **Why it Failed:** Potentially due to poor timing (creation peaked later during the campaign during the celebration and holidays of Ramadan, versus at the first half of the campaign during the fasting period) or the inability to have a highly differentiated creative during such a saturated cultural tentpole due to strong competitive marketing activity from Tik Tok or Instagram in Indonesia.
+    * **Data Proof:** ID Ramadan Gen pop 25-34 (-0.23%), Gen pop 18-34 (-0.2%).
+
+### 3. Japan (JP): Key Results & Learnings
+
+**Behavioral Theme:** The "Aesthetic Shield" and "Local Concept" Fit is mandatory; Interruptions are rejected.
+
+**What Worked (The Drivers)**
+
+* **The "Aesthetic Shield" (HL Photos):**
+    * **Why it Worked (Hypothesis):** Privacy by Design. JP users fear showing faces ("Face Reveal Anxiety"). High-fidelity "Faceless" templates (vlogs, fashion fit checks, cafe highlights, not showing faces etc) provided a safety shield. The Winter proactive was also effective with Male/Female GenPop in Japan with the consistent application of low friction templates (photo uploads, templates) matched with a relevant local seasonal moment like Winter.
+    * **Data Proof:** JP Global Shorts Holdback (July): Female 18-24 +1.19%, Gen pop +0.95%, Aug: Female 18-24 +3.3%, Sept: Female 18-24 +4.15%, Gen pop 18-24 +2.9%, campaign driving this: JP HL photos (April to Oct): JP Females 18-24 +2.88%, JP Females 18-34 +1.7%, JP Gen pop 18-24 +1.29%, JP Gen pop 18-34 +1.1%. JP Global Shorts Holdback (Dec): Male GenPop +0.91%, campaign driving this: Winter proactive (Templates/Photos): Male Genpop +1.08%, Female GenPop +1.8%, GenPop +0.77%
+* **Pull Discovery (Shelf):**
+    * **Why it Worked (Hypothesis):** Deliberate Intent. Japanese users prefer to opt-in to trends (Shelf) rather than have them forced into their Shorts feed. Inclusion of hyperlocal artists and expansion of trend use cases beyond dance (from illustration, to gaming, Pets, Lip Syncs and Transitions) also helped.
+    * **Data Proof:** JP Global Shorts Holdback (July): Female 18-24 +1.19%, Gen pop +0.95%, Aug: Female 18-24 +3.3%, Sept: Female 18-24 +4.15%, Gen pop 18-24 +2.9%, campaign driving this, Shelf1 (April to Oct): JP Females 18-34 (+1.5%), JP Gen pop 25-34 (+0.99%)
+* **Localized Global Kpop/Artist BTM with low friction templates and female customisation:**
+    * **Why it Worked (Hypothesis):** Concept Fit. The Ed Sheeran campaign didn't ask for a dance; it asked for a "Travel Photo Dump, reminiscing memories" (matching local behavior and creation use cases). Taylor Swift BTM 's usage of the template feature for the dance trend and the custom effect to give local users a "Showgirl" moment of their own, were all relevant to the Japanese local female, as seen from the success of Hyperlocal photos campaign which focuses on easy creation features. Aespa's artist-led non-dance (transition) trend creative helped provide expanded use cases for local users to create, beyond dance challenges, making it more relatable to Gen Pop Males.
+    * **Data Proof:** JP Global Shorts Holdback (July): Female 18-24 +1.19%, Gen pop +0.95%, Aug: Female 18-24 +3.3%, Sept: Female 18-24 +4.15%, Gen pop 18-24 +2.9%, campaign driving this: ED Sheeran BTM (June to July): Females 18-34 +1.45%, Male Gen pop +0.88%, Gen Pop 25-34 +1.44%, Gen Pop 18-34 +1.12%, Aespa Non dance CF Kpop proactive (July): Male Gen Pop +0.9%. Taylor Swift BTM (Oct - Nov): JP Female Gen pop +1.99%.
+
+**▼ What Didn't Work (The Drags)**
+
+* **Interruptive Push (SSC):**
+    * **Why it Failed:** Format Friction. Inserting trends into the viewing feed (SSC) is perceived as "noise" by deliberate JP users, leading to active rejection vs the success of Shelf for Japan.
+    * **Data Proof:** SSC1 (Apr to Nov): JP Female 18-34-1.07%, JP Female 25-34-1.6%, Gen pop 25-34-1.34%
+* **Concept mismatch on Hyperlocal scaled creation (APAC Food effects)**
+    * **Why it Failed:** Concept Disconnect. APAC custom cooking effect game ("Flip Pan Game") doesn't match with how food content comes to life locally in Japan (e.g. storytelling. highlighting cafe and restaurants with rich histories, while enjoying the food).
+    * **Data Proof:** APAC Food effects (Aug): JP Gen pop -0.48%.
+* **Video collage may be more inspiring than photo dumps on HL scaled creation (Autumn Non Al)**
+    * **Why it Failed:** Concept Disconnect. The JP Autumn Non Al Hyperlocal assets only had language localization from the Korea assets, focused on static photo dumps, while the Al assets (both human and non-human) feature a collage of engaging videos, this might have led to the video collages being more engaging and inspiring to create vs the static photo dumps.
+    * **Data Proof:** Autumn Non Al Hyperlocal scaled creation (Nov): JP Gen pop 25-34-0.9%, JP Gen pop 18-34-0.7%
+* **Gender Mismatch or in-market competing hyper-local trending songs impacting Artist BTMs:**
+    * **Why it Failed:** Alienation. The Taylor Swift "Showgirl" concept was too female-coded, actively alienating the JP Male segment without a generic variant. Stray Kids Proactive Campaign even with alternative creative concepts (e.g., featuring pets) for the "Ceremony" song and the established popularity of Stray Kids among Japanese females (evidenced by 86% female views on their channel and 80% on the song itself), may be attributed to competing trending songs from other artists, such as HANA and Snowman, which were highly popular during the same timeframe.
+    * **Data Proof:** Taylor Swift BTM (Oct - Nov): JP Male 18-24-4.25%, JP Male 18-34-2.2%, JP Male Gen pop -1.68), Kpop1 (Stray Kids) (Sept): JP Females Gen pop -1.03%.
+
+### 4. South Korea (KR): Key Results & Learnings
+
+**Behavioral Theme:** High-Octane Gaming for Males; "Drumbeat" Audio and "Local Concept Fit" for Females.
+
+**What Worked (The Drivers)**
+
+* **Gamified "Hyper-Skill" (F1 BTM):**
+    * **Why it Worked (Hypothesis):** Competitive Utility. Korean males engaged with the F1 effect not as "content" but as a "high score challenge" to beat peers.
+    * **Data Proof:** F1 BTM (Jun - Jul): KR Male 18-24 (+7.73%), KR GenPop 18-24 (+2.79%) (Massive outlier).
+* **Audio "Drumbeats" (UTS):**
+    * **Why it Worked (Hypothesis):** Cognitive Ease. The "Use This Sound" (UTS) format simplifies the decision tree. Regular bi-weekly prompts built a predictable habit.
+    * **Data Proof:** South Korea Global Shorts holdback (Oct): Female 25-34: +3.39%, Female 18-34: +2.55% and Female Gen pop: +1.23%, campaign driving this: UTS1 (Apr to Oct): Female 18-24: +1.83%, Female 25-34: +1.26%. South Korea Global Shorts holdback (Nov): Female 18-34: +2.54%, Female 25-34: +3.82%, Female Gen pop: +1.01%, campaign driving this: UTS2 (Nov to Dec): Female 18-34: +2.15%
+* **Localized Global Artist BTM with low friction templates and female customisation:**
+    * **Why it Worked (Hypothesis):** Concept Fit. The Alex Warren BTM template concept in particular that was anchored on "reminiscing fond memories" and the effect concept anchored on a simple photobooth collage, all relatable concepts for Korean young females to lower the barrier for creation.
+    * **Data Proof:** Alex Warren BTM (Jul-Aug): KR Female GenPop (+1.31%).
+
+**What Didn't Work (The Drags)**
+
+* **Interruptive Push (SSC):**
+    * **Why it Failed:** Similar to Japan, KR users rejected "forced" trends in the feed is perceived as "noise" by deliberate KR users, leading to active rejection.
+    * **Data Proof:** South Korea Global Shorts holdback (Oct): Male GenPop: -1.29%, campaigns driving this: SSC1 (Apr- Oct): Campaign holdback Female 25-34 (-1.81%) and Female 18-34 (-1.34%).
+* **Mainstream K-Pop (Aespa):**
+    * **Why it Failed:** Saturation/Fatigue. Standard "Dance Challenges" amongst more mainstream Korean Kpop artists might be saturated in KR. Without a novel hook (like Alex Warren's photo template), they fail to drive incremental lift.
+    * **Data Proof:** Aespa CF 1 (dance) (June): KR Gen pop -0.36%, Aespa CF2 (Non Dance) (July): KR Female 18-34-1.63%.
+* **Misaligned Global "Tentpoles" (Sabrina):**
+    * **Why it Failed:** Broad lift and scaled US/Global Artist campaigns (e.g. Sabrina), will need a dedicated pivot in strategy to hyper-localize content and concepts further for the Korean user (e.g. Alex Warren effects and template concepts are good examples that were relevant to the local user insight).
+    * **Data Proof:** Sabrina BTM (Sept): Gen Pop 18-24-5.09%.
+
+### 5. Rest of World (ROW): K-Pop Learnings
+
 **Behavioral Theme:** Western markets reject "Inauthentic" localized efforts; LATAM/EMEA Males embrace "High-Production" Effects.
-* **What Worked:** Brazil Male 25-34 **+0.93%**, Germany GenPop 25-34 **+1.12%**. Germany Male 18-24 **+3.27%**.
-* **What Didn't Work:** France Female 25-34 **-1.99%**, UK Female Gen pop **-0.76%**. US Male 18-34 **-0.49%**.
+
+**What Worked (The Drivers)**
+
+* **High-Production "Studio" Aesthetic with triple-variant creatives (easy effects, non-dance creatives and artist dance) (Brazil, Germany, Mexico, Indonesia):**
+    * **Why it Worked (Hypothesis):** Aspiration vs. Imitation. Males in BR/DE and Females in Mexico, may not have wanted to dance, but they did want the "K-Pop Star Aesthetic." High-fidelity custom effects and non-dance creative variants, allowed them to embody the fandom of Aespa/IDLE without performing the choreography.
+    * **Data Proof:** Aespa (Dirty Work) BTM: Brazil Male 25-34 +0.93%, Brazil Male 18-34 +0.77%, Brazil Male Gen pop +0.37%, Brazil Gen pop 25-34 +0.44%, Brazil Gen pop 18-34 +0.38%; Germany Gen Pop 25-34 +1.12%; Mexico Females 25-34 +0.87%. IDLE (Non-Dance) proactive: Brazil Female 25-34: +0.68%; Germany Male 18-24 +3.27%, Male 18-34 +1.57%; Indonesia Female 18-24 +0.51%.
+* **Diversified "Cute" Culture (Brazil):**
+    * **Why it Worked (Hypothesis):** Universal "Cute" Appeal. Stray Kids utilized a dual-variant strategy: "Pet UGC" (cats dancing) alongside the artist, another with the artist dance. This tapped into universal pet culture, transcending fandom barriers.
+    * **Data Proof:** Stray Kids Proactive: Brazil Female Gen Pop +0.28%.
+
+**▼ What Didn't Work (The Drags)**
+
+* **Localization Failure (France & UK):**
+    * **Why it Failed:** The "Uncanny Valley" of Localization. Despite high views (FR female views 66%, UK female views 66%), campaigns failed to drive DAU-SCT. Creatives may have felt "inauthentic" or forced to Western European users, unlike the organic uptake in LATAM.
+    * **Data Proof:** Aespa (Dirty Work) BTM:, France Female 25-34: -1.99%, France Female 18-34: -1.38, UK Female Gen pop: -0.76%, Indonesia Female Gen pop: -0.28%
+* **Male Gender Mismatch (US, Mexico, Japan):**
+    * **Why it Failed:** Low Relevance. Aespa's Dirty Work song Male view share was lower in Mexico and US vs other markets (Mexico Male Views-38%, US song views-41%) and the creative for both Aespa and BabyMonster was purely "Girl Group Aesthetic" without a gender-neutral bridge (like Gaming/Tech) negatively impacting male population.
+    * **Data Proof:** Aespa (Dirty Work) BTM: United States Male 18-34: -0.49%, Mexico Male 18-24: -2.04%, Mexico Male 18-34: -0.93%. BABYMONSTER proactive: Japan Male 25-34: -1.77%, Japan Male Gen pop: -0.72%, Japan Genpop 25-34: -1.13%
 
 ---
 
-### Appendix: APAC Stat Sig Positive DAU-SCT Months 2025
+## Appendix
 
-* **April Global Holdback:** APAC Stat Sig Positive for Males 18-24 (**+0.16%**) and Males 18-34 (**+0.07%**).
-    * Campaign Evidence:
-        * JP Hyperlocal Photos (F18-24 **+2.88%**, F18-34 **+1.70%**, Gen Pop 18-24 **+1.29%**, Gen Pop 18-34 **+1.10%**)
-        * JP Shelf1 (Apr - Oct) (F18-34 **+1.50%**, Gen Pop 25-34 **+0.99%**)
-        * ID HL Pets (Apr- Jul) (Gen Pop 25-34 **+0.26%**, Gen pop 18-34: **+0.23%**, Gen pop **+0.16%**)
-        * KR UTS1 (Apr-Oct) (F18-24 **+1.83%**, F25-34 **+1.26%**)
-* **July Global Holdback:** APAC Stat Sig Positive for Gen Pop 18-34 (**+0.28%**) and Gen Pop (**+0.27%**).
-    * Campaign Evidence:
-        * IN F1 BTM (M18-34 **+0.42%**)
-        * IN Travel CF1 (July - Aug) (F25-34 **+0.19%**, F18-34 **+0.14%**)
-        * ID HL Pets (Apr- July) (Gen pop 25-34 **+0.26%**, Gen pop 18-34: **+0.23%**, Gen pop **+0.16%**)
-        * ID Aespa (F25-34 **+0.41%**)
-        * JP HL Photos (Mar - Oct) (F18-24 **+2.88%**, F18-34 **+1.70%**, Gen Pop 18-24 **+1.29%**, Gen Pop 18-34 **+1.10%**)
-        * JP Shelf 1 (Apr-Oct) (F18-34 **+1.50%**, Gen Pop 25-34 **+0.99%**)
-        * JP EdSheeran (June-July) (F18-34 **+1.45%**, Male Gen Pop **+0.88%**, Gen Pop 25-34 **+1.44%**, Gen Pop 18-34 **+1.12%**)
-        * JP Aespa Non Dance CF (M Gen Pop **+0.90%**)
-        * KR UTS1 (Apr-Oct) (F18-24 **+1.83%**, F25-34 **+1.26%**)
-        * KR F1 BTM (M18-24 **+7.73%**)
-        * KR Alex Warren (Female Gen Pop **+1.31%**).
-* **October Global Holdback:** APAC Stat Sig Positive for Male 18-24 **+0.41%**, Male 25-34 **+0.07%**, Male 18-34 **+0.21%**, Male Gen pop **+0.18%**, Gen pop 18-24 **+0.45%**, Gen pop 25-34 **+0.21%**, Gen pop 18-34 **+0.3%**, Gen pop **+0.23%**.
-    * Campaign Evidence:
-        * IN MVR2 (Gen Pop **+0.12%**, Gen pop 25-34 **+0.13%**, Gen pop 18-34 **+0.11%**, Female 25-34 **+0.26%**, Female 18-34 **+0.21%**)
-        * IN HL Food Non-Al (Gen Pop 18-24 **+0.12%**)
-        * KR UTS1 (F18-24 **+1.83%**)
-        * ID Kpop proactive ROW3 (Oct - Dec) (Female 18-34 **+0.39%**)
-        * JP HL Photos (Mar - Oct) (Female 18-24 **+2.88%**, Female 18-34 **+1.7%**, Gen pop 18-24 **+1.29%**, Gen pop 18-34 **+1.1%**)
-        * JP Shelf 1 (Apr-Oct) (F18-34 **+1.50%**, Gen Pop 25-34 **+0.99%**)
-        * JP Taylor Swift BTM (Oct - Nov) (Female Gen pop **+1.99%**)
-        * KR UTS1 (Apr - Oct) (Female 18-24 **+1.83%**, Female 25-34 **+1.26%**)
-* **November Global Holdback:** APAC Stat Sig Positive for Males 18-24 **+0.38%**, Male Gen pop **+0.16%**, Gen pop 18-24 **+0.39%**, Gen pop 18-34 **+0.22%**, Gen pop **+0.2%**.
-    * Campaign Evidence:
-        * IN MVR2 (Oct - Nov) (Female 25-34 **+0.26%**, Female 18-34 **+0.21%**, Gen pop 25-34 **+0.13%**, Gen pop 18-34: **+0.11%**, Gen pop **+0.12%**)
-        * IN HL Food Non Al (Oct - Nov) (Gen pop 18-24 **+0.12%**)
-        * IN SSC2 (Nov - Dec) (Male 18-34 **+0.13%**)
-        * IN Arts & Craft (Nov - Dec) (Male Gen pop **+0.15%**, Gen pop **+0.12%**)
-        * ID Kpop proactive ROW3 (Oct - Dec) (Female 18-34 **+0.39%**)
-        * JP Taylor Swift BTM (Oct - Nov) (Female Gen pop **+1.99%**)
-        * KR UTS2 (Nov - Dec) (Female 18-34 **+2.15%**)
-* **December Global Holdback:** APAC Stat Sig Positive for GenPop 18-34 **+0.22%** and GenPop **+0.26%**.
-    * Campaign Evidence:
-        * IN Arts & Craft (Nov - Dec) (Male Gen pop **+0.15%**, Gen pop **+0.12%**)
-        * ID Global Gen Al - veo 31 (Dec) (Female 18-34 **+1.35%**, Female GenPop **+1%**)
-        * ID Kpop proactive ROW3 (Oct - Dec) (Female 18-34 **+0.39%**)
-        * JP Winter (Dec) (Female GenPop **+1.8%**, Male GenPop **+1.08%**, GenPop **+0.77%**)
+**Months with APAC (IN, ID, JP, KR) Stat sig positive DAU-SCT on Global Shorts holdback and Campaign drivers 2025**
+
+* **April Global Holdback:** APAC Stat Sig Positive for Males 18-24 (+0.16%) and Males 18-34 (+0.07%).
+    * **Campaign Evidence:** JP Hyperlocal Photos (F18-24 +2.88%, F18-34 +1.70%, Gen Pop 18-24 +1.29%, Gen Pop 18-34 +1.10%); JP Shelf1 (Apr - Oct) (F18-34 +1.50%, Gen Pop 25-34 +0.99%); ID HL Pets (Apr- Jul) (Gen Pop 25-34 +0.26%, Gen pop 18-34: +0.23%, Gen pop +0.16%); KR UTS1 (Apr-Oct) (F18-24 +1.83%, F25-34 +1.26%)
+* **July Global Holdback:** APAC Stat Sig Positive for Gen Pop 18-34 (+0.28%) and Gen Pop (+0.27%).
+    * **Campaign Evidence:** IN F1 BTM (M18-34 +0.42%); IN Travel CF1 (July - Aug) (F25-34 +0.19%, F18-34 +0.14%); ID HL Pets (Apr- July) (Gen pop 25-34 +0.26%, Gen pop 18-34(+0.23%, Gen pop +0.16%); ID Aespa (F25-34 +0.41%); JP HL Photos (Mar - Oct) (F18-24 +2.88%, F18-34 +1.70%, Gen Pop 18-24 +1.29%, Gen Pop 18-34 +1.10%; JP Shelf 1 (Apr-Oct) (F18-34+1.50%, Gen Pop 25-34 +0.99%; JP EdSheeran (June-July) (F18-34 +1.45%, Male Gen Pop +0.88%, Gen Pop 25-34 +1.44%, Gen Pop 18-34 +1.12%); JP Aespa Non Dance CF (M Gen Pop +0.90%); KR UTS1 (Apr-Oct) (F18-24 +1.83%, F25-34 +1.26%); KR F1 BTM (M18-24 +7.73%); KR Alex Warren (Female Gen Pop +1.31%).
+* **October Global Holdback:** APAC Stat Sig Positive for Male 18-24 +0.41%, Male 25-34 +0.07%, Male 18-34 +0.21%, Male Gen pop +0.18%, Gen pop 18-24 +0.45%, Gen pop 25-34 +0.21%, Gen pop 18-34 +0.3, Gen pop +0.23%.
+    * **Campaign Evidence:** IN MVR2 (Gen Pop +0.12%, Gen pop 25-34 +0.13%, Gen pop 18-34 +0.11%, Female 25-34 +0.26%, Female 18-34 +0.21%); IN HL Food Non-Al (Gen Pop 18-24 +0.12%); KR UTS1 (F18-24 +1.83%); ID Kpop proactive ROW3 (Oct - Dec) (Female 18-34 +0.39%); JP HL Photos (Mar - Oct) (Female 18-24 +2.88%, Female 18-34 +1.7%, Gen pop 18-24 +1.29%, Gen pop 18-34 +1.1%); JP Shelf 1 (Apr-Oct) (F18-34 +1.50%, Gen Pop 25-34 +0.99%); JP Taylor Swift BTM (Oct - Nov) (Female Gen pop +1.99%); KR UTS1 (Apr - Oct) (Female 18-24 +1.83%, Female 25-34 +1.26%)
+* **November Global Holdback:** APAC Stat Sig Positive for Males 18-24 +0.38%, Male Gen pop +0.16%, Gen pop 18-24 +0.39%, Gen pop 18-34 +0.22%, Gen pop +0.2%.
+    * **Campaign evidence:** IN MVR2 (Oct - Nov) (Female 25-34 +0.26%, Female 18-34 +0.21%, Gen pop 25-34 +0.13%, Gen pop 18-34+0.11%, Gen pop +0.12%); IN HL Food Non Al (Oct - Nov) (Gen pop 18-24 +0.12%); IN SSC2 (Nov - Dec) (Male 18-34 +0.13%); IN Arts & Craft (Nov - Dec) (Male Gen pop +0.15%, Gen pop +0.12%); ID Kpop proactive ROW3 (Oct - Dec) (Female 18-34 +0.39%); JP Taylor Swift BTM (Oct - Nov) (Female Gen pop +1.99%); KR UTS2 (Nov - Dec) (Female 18-34 +2.15%)
+* **December Global Holdback:** APAC Stat Sig Positive for GenPop 18-34 +0.22% and GenPop +0.26%
+    * **Campaign evidence:** IN Arts & Craft (Nov - Dec) (Male Gen pop +0.15%, Gen pop +0.12%); ID Global Gen Al - veo 31 (Dec) (Female 18-34 +1.35%, Female GenPop +1%); ID Kpop proactive ROW3 (Oct - Dec) (Female 18-34 +0.39%); JP Winter (Dec) (Female GenPop +1.8%, Male GenPop +1.08%, GenPop +0.77%)
 `;
 
-        const MANUAL_YEAR_AHEAD_CONTENT = `
+         const MANUAL_YEAR_AHEAD_CONTENT = `
 # 2026 Shorts Experiment Learning Agenda
 
 ### Strategic Framework: Behavioral Levers for Scalable creation & Retention.
@@ -695,8 +824,12 @@
 </table>
 `;
 
-        // --- 3. HELPER FUNCTIONS (standard declarations for hoisting) ---
+        // --- GLOBAL LOGIC ---
+        let globalData = [], globalHoldbackData = [], globalKPopData = [], globalKPopDates = [];
+        let repoCache = { 'repo_campaign': [], 'repo_holdback': [], 'repo_kpop': [] };
+        let currentMetricView = 'both'; 
 
+        // --- DATA PROCESSING FUNCTIONS ---
         function stripWhitespace(value) { return typeof value === 'string' ? value.trim() : value; }
         
         function parseSigValue(val) {
@@ -758,6 +891,7 @@
             return { month: 'Unknown', year: 'Year' };
         }
 
+        // --- RENDER FUNCTIONS ---
         function renderMarkdown(markdown, targetId) {
             if (!markdown) return;
             const targetElement = document.getElementById(targetId);
@@ -767,8 +901,6 @@
             html = html.replace(/(-\s*\d+(\.\d+)?%)/g, '<span class="sig-red">$1</span>');
             targetElement.innerHTML = html;
         }
-
-        // --- 4. REPOSITORY & DATA LOGIC ---
 
         function renderRepositoryUI() {
             let total = repoCache['repo_campaign'].length + repoCache['repo_holdback'].length + repoCache['repo_kpop'].length;
@@ -956,8 +1088,6 @@
              return { finalTableData: final, segments: sortedSegs };
         }
 
-        // --- 5. RENDERERS & LOGIC PHASES ---
-
         function renderCountryTable(processedData, containerId) {
             const { finalTableData, sortedSegments, countryCode } = processedData;
             const container = document.getElementById(containerId);
@@ -1084,6 +1214,8 @@
             container.innerHTML = html;
         }
 
+        // --- CORE LOGIC PHASES ---
+
         function runCampaignPhase(data) {
             const container = document.getElementById('summary-output');
             if(!container) return;
@@ -1149,6 +1281,7 @@
             const cFiles = Array.from(document.getElementById('campaignFileInput').files);
             const hFiles = Array.from(document.getElementById('holdbackFileInput').files);
             const kFiles = Array.from(document.getElementById('kpopFileInput').files);
+            
             const getRepoFiles = (cat) => {
                 const selected = [];
                 if (repoCache && repoCache[cat]) repoCache[cat].forEach((file, idx) => { if (document.getElementById(`chk-${cat}-${idx}`)?.checked) selected.push(file); });
@@ -1163,6 +1296,7 @@
             let processedCount = 0;
             let totalToProcess = cFiles.length + hFiles.length + kFiles.length + cRepo.length + hRepo.length + kRepo.length;
             const checkDone = () => { processedCount++; if (processedCount >= totalToProcess) { renderRepositoryUI(); finishProcessing(false); } };
+            
             const processFileItem = (item, type, isRepo) => {
                 const name = item.name.toLowerCase();
                 const content = isRepo ? item.content : item; 
@@ -1171,6 +1305,8 @@
                     if (type === 'campaign') globalData = globalData.concat(data);
                     else if (type === 'holdback') { const { month, year } = extractMonthFromFileName(item.name); globalHoldbackData.push({ data, month, year }); }
                     else if (type === 'kpop') { if (name.includes('date')) globalKPopDates = globalKPopDates.concat(data); else globalKPopData = globalKPopData.concat(data); }
+                    
+                    // Trigger cloud save if it's a new upload
                     if (!isRepo && name.endsWith('.csv') && window.saveToCloud) {
                         let cat = type === 'holdback' ? 'repo_holdback' : type === 'kpop' ? 'repo_kpop' : 'repo_campaign';
                         window.saveToCloud({ name: item.name, content: Papa.unparse(data), type: 'csv' }, cat);
@@ -1184,7 +1320,7 @@
             cRepo.forEach(f => processFileItem(f, 'campaign', true)); hRepo.forEach(f => processFileItem(f, 'holdback', true)); kRepo.forEach(f => processFileItem(f, 'kpop', true));
         }
 
-        // Navigation
+        // NAVIGATION & UI
         function switchTab(tabId) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
@@ -1234,6 +1370,14 @@
             } catch (err) {}
             selection.removeAllRanges();
         }
+
+        // Exposing cache updater to global scope for Firebase listener
+        window.updateRepoCacheFromCloud = (repoData) => {
+            repoCache = repoData;
+            renderRepositoryUI();
+            const syncStatus = document.getElementById('sync-status');
+            if(syncStatus) syncStatus.textContent = 'Repository Synced';
+        };
 
         window.updateMetricView = (view) => {
             currentMetricView = view;
